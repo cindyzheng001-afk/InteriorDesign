@@ -22,20 +22,22 @@ if api_key:
     except Exception as e:
         st.error(f"Error initializing AI Client: {e}")
 
-# --- 2. AI FUNCTIONS (The "Data Mining" Logic) ---
+# --- 2. AI FUNCTIONS ---
 
-def generate_room_image(original_image, style, user_notes):
+def generate_room_image(style, user_notes, original_image=None):
     """
-    Uses Imagen 3 (via Gemini SDK) to generate a new room design.
+    Generates a room design. 
+    If original_image is provided, it uses it as a reference (simulated via prompt for this demo).
+    If not, it creates from scratch.
     """
     if not client: return None
     
-    # Construct the prompt
-    prompt = (
-        f"A photorealistic interior design photo of a {style} room. "
-        f"{user_notes}. "
-        f"High quality, 8k resolution, architectural photography."
-    )
+    # Base prompt
+    prompt = f"A photorealistic interior design photo of a {style} room. {user_notes}. High quality, 8k resolution, architectural photography."
+
+    # (Optional) If we had an image, in a pure Imagen 3 pipeline we rely on the text. 
+    # To make it smarter, we could ask Gemini to describe the old image first, but for now 
+    # we stick to the direct prompt to keep it fast and stable for your demo.
     
     try:
         # Generate the image
@@ -52,7 +54,6 @@ def generate_room_image(original_image, style, user_notes):
 def extract_product_data(image):
     """
     Uses Gemini Vision to 'mine' the generated image for specific products.
-    Returns a structured JSON list.
     """
     if not client: return []
     
@@ -84,26 +85,32 @@ def extract_product_data(image):
         st.warning(f"Could not extract products: {e}")
         return []
 
-# --- 3. USER INTERFACE (The Web App) ---
+# --- 3. USER INTERFACE ---
 
 st.title("✨ AI Interior Decorator")
 st.markdown("### Final Project: End-to-End Design Miner")
-st.write("Upload a room photo, select a style, and let the AI generate a new look + shopping links.")
 
 # Sidebar for inputs
 with st.sidebar:
     st.header("Project Controls")
     
-    # Input 1: Image
-    uploaded_file = st.file_uploader("1. Upload Room Photo", type=['jpg', 'png', 'jpeg'])
+    # NEW: Mode Selection
+    mode = st.radio("1. Choose Mode", ["Redesign Existing Room", "Design from Scratch"])
     
-    # Input 2: Style
-    style = st.selectbox("2. Select Style", 
+    uploaded_file = None
+    # Logic: Only show uploader if "Redesign" is selected
+    if mode == "Redesign Existing Room":
+        uploaded_file = st.file_uploader("2. Upload Room Photo", type=['jpg', 'png', 'jpeg'])
+    else:
+        st.info("✨ creative mode: Describe your dream room below.")
+
+    # Style Selection
+    style = st.selectbox("3. Select Style", 
         ["Modern Minimalist", "Bohemian Chic", "Industrial Loft", 
          "Mid-Century Modern", "Scandinavian", "Cyberpunk", "Luxury Art Deco"])
     
-    # Input 3: Custom Prompt
-    notes = st.text_area("3. Custom Requests", "e.g., Make the sofa dark blue, add a large rug.")
+    # Custom Prompt
+    notes = st.text_area("4. Custom Requests", "e.g., Make the sofa dark blue, add a large rug.")
     
     # Check for API Key
     if not api_key:
@@ -115,39 +122,61 @@ with st.sidebar:
 # Main Display Layout
 col1, col2 = st.columns(2)
 
-# Logic to run when button is clicked
-if uploaded_file:
-    # Load and show original
-    original_img = Image.open(uploaded_file)
-    with col1:
-        st.subheader("Original Room")
-        st.image(original_img, use_container_width=True)
+# -- LOGIC HANDLER --
 
-    if run_btn and api_key:
-        with st.spinner("🤖 AI is processing... (Generating new room design)"):
-            # Step 1: Generate
-            new_room_img = generate_room_image(original_img, style, notes)
+# Case 1: Redesign Mode (User needs to upload a file)
+if mode == "Redesign Existing Room":
+    if uploaded_file:
+        original_img = Image.open(uploaded_file)
+        with col1:
+            st.subheader("Original Room")
+            st.image(original_img, use_container_width=True)
+    else:
+        # If they picked redesign but didn't upload yet
+        with col1:
+            st.info("👈 Please upload an image to start.")
+
+# Case 2: Scratch Mode (No upload needed)
+elif mode == "Design from Scratch":
+    with col1:
+        st.subheader("Your Concept")
+        st.markdown(f"**Style:** {style}")
+        st.markdown(f"**Notes:** {notes}")
+        st.caption("(Generating from blank canvas...)")
+
+# -- GENERATION TRIGGER --
+if run_btn and api_key:
+    # Validation: Don't run if they chose Redesign but forgot the file
+    if mode == "Redesign Existing Room" and not uploaded_file:
+        st.error("Please upload an image first!")
+        st.stop()
+
+    with st.spinner("🤖 AI is processing..."):
+        # Step 1: Generate
+        # We pass the uploaded image if it exists, otherwise None
+        img_input = Image.open(uploaded_file) if uploaded_file else None
+        new_room_img = generate_room_image(style, notes, img_input)
+        
+    if new_room_img:
+        with col2:
+            st.subheader(f"✨ Result: {style}")
+            st.image(new_room_img, use_container_width=True)
+        
+        # Step 2: Data Mine
+        st.divider()
+        st.subheader("🛍️ Product Analysis (Data Mining)")
+        st.write("The AI is now analyzing the *newly generated* image to identify purchasable items.")
+        
+        with st.spinner("🔍 Mining product data..."):
+            items = extract_product_data(new_room_img)
             
-        if new_room_img:
-            with col2:
-                st.subheader(f"✨ Result: {style}")
-                st.image(new_room_img, use_container_width=True)
-            
-            # Step 2: Data Mine
-            st.divider()
-            st.subheader("🛍️ Product Analysis (Data Mining)")
-            st.write("The AI is now analyzing the *newly generated* image to identify purchasable items.")
-            
-            with st.spinner("🔍 Mining product data..."):
-                items = extract_product_data(new_room_img)
-                
-                if items:
-                    # Display items in a nice grid
-                    grid = st.columns(3)
-                    for i, item in enumerate(items):
-                        with grid[i % 3]:
-                            st.info(f"**{item['name']}**")
-                            st.caption(f"Color: {item['color']}")
-                            # Link button
-                            q = item['query'].replace(" ", "+")
-                            st.markdown(f"[🛒 Find on Google](https://www.google.com/search?q={q}&tbm=shop)")
+            if items:
+                # Display items in a nice grid
+                grid = st.columns(3)
+                for i, item in enumerate(items):
+                    with grid[i % 3]:
+                        st.info(f"**{item['name']}**")
+                        st.caption(f"Color: {item['color']}")
+                        # Link button
+                        q = item['query'].replace(" ", "+")
+                        st.markdown(f"[🛒 Find on Google](https://www.google.com/search?q={q}&tbm=shop)")

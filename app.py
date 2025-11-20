@@ -27,26 +27,35 @@ if api_key:
 def generate_room_image(style, user_notes, original_image=None):
     """
     Generates a room design. 
-    If original_image is provided, it uses it as a reference (simulated via prompt for this demo).
-    If not, it creates from scratch.
     """
     if not client: return None
     
     # Base prompt
     prompt = f"A photorealistic interior design photo of a {style} room. {user_notes}. High quality, 8k resolution, architectural photography."
-
-    # (Optional) If we had an image, in a pure Imagen 3 pipeline we rely on the text. 
-    # To make it smarter, we could ask Gemini to describe the old image first, but for now 
-    # we stick to the direct prompt to keep it fast and stable for your demo.
     
     try:
-        # Generate the image
+        # Attempt 1: Standard Generation (Imagen 3)
         response = client.models.generate_image(
             model='imagen-3.0-generate-001',
             prompt=prompt,
             config=types.GenerateImageConfig(number_of_images=1)
         )
         return response.generated_images[0].image
+
+    except AttributeError:
+        # Attempt 2: Fallback for different SDK versions
+        try:
+            # Some versions use plural 'generate_images'
+            response = client.models.generate_images(
+                model='imagen-3.0-generate-001',
+                prompt=prompt,
+                config=types.GenerateImageConfig(number_of_images=1)
+            )
+            return response.generated_images[0].image
+        except Exception as e2:
+            st.error(f"Generation Error (Check Library Version): {e2}")
+            return None
+            
     except Exception as e:
         st.error(f"Image Generation Failed: {e}")
         return None
@@ -94,7 +103,7 @@ st.markdown("### Final Project: End-to-End Design Miner")
 with st.sidebar:
     st.header("Project Controls")
     
-    # NEW: Mode Selection
+    # Mode Selection
     mode = st.radio("1. Choose Mode", ["Redesign Existing Room", "Design from Scratch"])
     
     uploaded_file = None
@@ -102,7 +111,7 @@ with st.sidebar:
     if mode == "Redesign Existing Room":
         uploaded_file = st.file_uploader("2. Upload Room Photo", type=['jpg', 'png', 'jpeg'])
     else:
-        st.info("✨ creative mode: Describe your dream room below.")
+        st.info("✨ Creative Mode: Describe your dream room below.")
 
     # Style Selection
     style = st.selectbox("3. Select Style", 
@@ -124,7 +133,7 @@ col1, col2 = st.columns(2)
 
 # -- LOGIC HANDLER --
 
-# Case 1: Redesign Mode (User needs to upload a file)
+# Case 1: Redesign Mode
 if mode == "Redesign Existing Room":
     if uploaded_file:
         original_img = Image.open(uploaded_file)
@@ -132,11 +141,10 @@ if mode == "Redesign Existing Room":
             st.subheader("Original Room")
             st.image(original_img, use_container_width=True)
     else:
-        # If they picked redesign but didn't upload yet
         with col1:
             st.info("👈 Please upload an image to start.")
 
-# Case 2: Scratch Mode (No upload needed)
+# Case 2: Scratch Mode
 elif mode == "Design from Scratch":
     with col1:
         st.subheader("Your Concept")
@@ -146,16 +154,14 @@ elif mode == "Design from Scratch":
 
 # -- GENERATION TRIGGER --
 if run_btn and api_key:
-    # Validation: Don't run if they chose Redesign but forgot the file
+    # Validation
     if mode == "Redesign Existing Room" and not uploaded_file:
         st.error("Please upload an image first!")
         st.stop()
 
     with st.spinner("🤖 AI is processing..."):
         # Step 1: Generate
-        # We pass the uploaded image if it exists, otherwise None
-        img_input = Image.open(uploaded_file) if uploaded_file else None
-        new_room_img = generate_room_image(style, notes, img_input)
+        new_room_img = generate_room_image(style, notes, None)
         
     if new_room_img:
         with col2:
